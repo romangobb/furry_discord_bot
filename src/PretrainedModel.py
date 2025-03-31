@@ -12,13 +12,12 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-chat_history = []
-
 # Функция для генерации ответа
-def generate(message, model="gemma3:1b"):
+def generate(message, author, model="gemma3:1b"):
     response = chat(model=model,
         messages=[
-            {"role": "user", "content": message}
+            {"role": "system", "content": "Старайся не писать больше 2000 тысяч символов и отвечай на сообщения на русском."},
+            {"role": "user", "content": f"{author}: {message}"}
         ]
     )
     return response["message"]["content"]
@@ -40,21 +39,21 @@ async def on_message(message):
         if message.channel.id not in allowed_channel_ids:
             return  # Если канал не разрешён, игнорируем сообщение
 
-        # Добавляем сообщение с указанием автора
-        chat_history.append({
-            "author": message.author.name,
-            "content": message.content
-        })
-        if len(chat_history) > 1000:
-            chat_history.pop(0)
+        #if "@romangobb’s_bot#7030" not in message.content:
+        #    return
 
         # Генерация ответа
-        context = "\n".join(
-            [msg["content"] for msg in chat_history[-1:]])  # Используем последние 5 сообщений как контекст
-        response = generate(context)
+        #context = "\n".join(
+        #    [msg["content"] for msg in chat_history[-1:]])  # Используем последние 1 сообщение как контекст
+        response = generate(message.content, message.author.name)
 
         # Отправляем ответ в тот же канал
-        await message.channel.send(response)
+        if len(response) > 2000:
+            await message.reply("Мужик, ну ты это, извини, но бот настрочил слишком много и дискорд зажевал сообщение. \
+            Переспроси вопрос и попроси её написать ответ покороче", mention_author=True)
+
+        await message.reply(response, mention_author=True)
+
 
     except Exception as e:
         print(f"Произошла ошибка: {e}")
