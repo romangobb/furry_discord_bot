@@ -3,7 +3,6 @@ from discord.ext import commands
 import torch
 from transformers import T5ForConditionalGeneration, T5Tokenizer, T5Config
 from torch.optim import Adam
-import random
 import os
 import traceback
 
