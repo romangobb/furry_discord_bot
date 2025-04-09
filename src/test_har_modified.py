@@ -3,7 +3,6 @@ from discord.ext import commands
 import torch
 from transformers import T5ForConditionalGeneration, T5Tokenizer, T5Config
 from torch.optim import Adam
-import random
 import os
 import traceback
 
@@ -24,8 +23,8 @@ MODEL_SAVE_PATH = "./saved_model"
 os.makedirs(MODEL_SAVE_PATH, exist_ok=True)
 
 # Переменные для управления обучением
-retrain =  False  # Если True, обучение с нуля; если False, загрузка сохранённой модели
-is_train = True # Если True, обучение при старте; если False, сразу начинает отвечать
+retrain = False  # Если True, обучение с нуля; если False, загрузка сохранённой модели
+is_train = False # Если True, обучение при старте; если False, сразу начинает отвечать
 
 # Инициализация токенизатора и модели T5
 model_name = "cointegrated/rut5-small"
@@ -45,10 +44,8 @@ model.to(device)
 chat_history = []
 
 # Функция для генерации ответа
-import time
 def generate_response(context, max_new_tokens=50):
     # Токенизация входного текста
-    tm1=time.time()
     inputs = tokenizer(context, return_tensors="pt", truncation=True, max_length=512, padding=True)
     
     # Перенос данных на GPU
@@ -56,25 +53,19 @@ def generate_response(context, max_new_tokens=50):
     
     # Генерация ответа
     outputs = model.generate(
-        **inputs,  # Входные данные (токенизированный текст)
-        
-        # Основные параметры генерации
-        max_new_tokens=max_new_tokens,  # Максимальное количество новых токенов, которые модель может сгенерировать.
-        num_return_sequences=1,  # Количество возвращаемых последовательностей (вариантов ответа).
-        no_repeat_ngram_size=2,  # Запрещает повторение n-грамм (например, биграмм). Уменьшает повторения.
-        repetition_penalty=1.2,  # Штраф за повторение токенов. Значение >1.0 уменьшает повторения.
-        top_k=30,  # Ограничивает выбор следующего токена до `k` наиболее вероятных вариантов.
-        top_p=0.9,  # Ограничивает выбор следующего токена по кумулятивной вероятности (nucleus sampling).
-        do_sample=True,  # Включает sampling (выборку), делая генерацию более разнообразной.
-        temperature=0.7,  # Регулирует "креативность". Высокие значения делают генерацию менее предсказуемой.
-        #length_penalty=0.1,  # Накладывает штраф за длину последовательности. >1.0 поощряет длинные ответы, <1.0 — короткие.
-        use_cache=True  # Включает использование кэша для ускорения генерации, особенно при длинных последовательностях.
+        **inputs,
+        max_new_tokens=max_new_tokens,  # Максимальное количество новых токенов
+        num_return_sequences=1,
+        no_repeat_ngram_size=2,
+        #repetition_penalty=2.0,
+        top_k=50,  # топ-50 
+        top_p=0.95,  
+        do_sample=True,  # Вsampling
+        #temperature=0.2
     )
-
     
     # Декодирование ответа
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    print(time.time()-tm1)
     return response
 
 # Обучение модели на основе истории чата
@@ -82,7 +73,7 @@ def train_model_on_chat():
     if len(chat_history) < 2:
         print("Недостаточно данных для обучения.")
         return
-    print("длина",len(chat_history))
+    
     optimizer = Adam(model.parameters(), lr=1e-4)  # Используем Adam
     model.train()
 
@@ -121,11 +112,10 @@ def train_model_on_chat():
     total_batches = (len(inputs["input_ids"]) + batch_size - 1) // batch_size  # Количество батчей
 
     # Добавляем 5 эпох обучения
-    epochs = 200
+    epochs = 20
     for epoch in range(epochs):
         print(f"\nЭпоха {epoch + 1}/{epochs}")
         for batch_idx in range(total_batches):
-            
             start_idx = batch_idx * batch_size
             end_idx = min((batch_idx + 1) * batch_size, len(inputs["input_ids"]))
 
@@ -204,7 +194,7 @@ def save_model():
 # Получение последних 1000 сообщений из канала
 async def fetch_initial_messages(channel):
     print("Загрузка последних 1000 сообщений для обучения...")
-    async for message in channel.history(limit=50000):
+    async for message in channel.history(limit=100):
         chat_history.append({
             "author": message.author.name,  # Сохраняем имя автора
             "content": message.content     # Сохраняем текст сообщения
@@ -257,7 +247,7 @@ async def on_message(message):
             chat_history.pop(0)
 
         # Генерация ответа
-        context = "\n".join([msg["content"] for msg in chat_history[-2:]])  # Используем последние 5 сообщений как контекст
+        context = "\n".join([msg["content"] for msg in chat_history[-5:]])  # Используем последние 5 сообщений как контекст
         response = generate_response(context, max_new_tokens=50)
 
         # Отправляем ответ в тот же канал

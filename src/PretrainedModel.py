@@ -5,7 +5,7 @@ from ollama import chat
 import traceback
 
 # Настройки бота
-TOKEN = 'MTE2MTM5NjA0ODkxMzI0MDA4Ng.GGgerJ.a6C1ShrN_NAhmAV8JR28NxvKTKaHEXTyOo-RfI'
+with open("../token.txt", "r") as file: TOKEN = file.read()
 intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
