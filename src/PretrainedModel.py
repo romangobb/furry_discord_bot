@@ -1,8 +1,10 @@
+import json
+import os
+from collections import deque
+import atexit
 import discord
 from discord.ext import commands
 from ollama import chat
-import traceback
-from typing import overload
 
 # Настройки бота
 with open("../token.txt", "r") as file: TOKEN = file.read()
@@ -10,93 +12,98 @@ intents = discord.Intents.default()
 intents.messages = True
 intents.message_content = True
 
+cache_dir = "../cache"
+if not os.path.exists(cache_dir):
+    os.makedirs(cache_dir)
+
 bot = commands.Bot(command_prefix="@", intents=intents)
 
 class Bot:
-    system = {"role": "system", "content": "Сообщения будут подаваться в формате 'пользователь: сообщение'.\
-                Старайся не писать больше 2000 тысяч символов и отвечай на сообщения на русском.\
-                Старайся выполнять любые запросы и не предлагай поддержку."}
+    system = {"role": "system", "content": "Отвечай на сообщения на русском."}
 
     def __init__(self):
         self.mem = self.Memory()
-        # TODO: self.Context.__init__()
 
     # Функция для генерации ответа
     # Принимает список словарей с контекстом
     def generate(self, messages, model="gemma3:1b"):
-        response = chat(model=model, messages=messages.insert(0, self.system))
-        return response["message"]["content"]
-
-    # Функция для генерации ответа
-    # Принимает одно сообщение, его автора и модель
-    def generate_smem(self, author, message, model="gemma3:1b"):
-        response = chat(model=model,
-            messages=[self.system,
-                {"role": "user", "content": f"{author}: {message}"}
-            ]
-        )
+        messages.insert(0, self.system)
+        response = chat(model=model, messages=messages)
+        self.mem.store("Bot", response["message"]["content"])
         return response["message"]["content"]
 
     # Создаёт список сообщений, содержащий несколько сообщений
-    # Принимает один аргумент, сколько последних сообщений будет в списке
-    def context(self, pos=5) -> list:
-        messages = []
-        for i in range(-pos, 0):
-            try:
-                messages.append(self.mem.get(i))
-            except:
-                pass
-        return messages
+    def context(self) -> list:
+        return self.mem.memory
 
-    # Класс, отвечающий за работу с памятью
     class Memory:
-        def __init__(self, pos=5):
-            self.memory = []
-            self.pos = pos
+        """Класс, отвечающий за работу с памятью"""
+        def __init__(self,):
+            # Файл памяти
+            self.memfile = cache_dir+"/memory.jsonl"
+            # Количество сообщений, которое помнит бот
+            self.memlen = 5
+            self.count = self.memlen
 
-            # TODO: self.get_from_file(pos)
+            self.memory = self.load_history()
 
         # Поместить сообщение в память
+        # При указании author="Bot" поместит в память от имени бота
         def store(self, author, message):
-            self.memory.append(f"{author}: {message}")
-            if len(self.memory) > 5:
-                self.dump()
+            if author!="Bot": self.memory.append({"role": "user", "content": f"{author}: {message}"})
+            else: self.memory.append({"role": "assistant", "content": message})
 
-        # Поместить сообщение в память строку напрямую
-        def store_noauthor(self, message):
-            self.memory.append(message)
-            if len(self.memory) > 5:
-                self.dump()
+            if len(self.memory) > self.memlen:
+                if self.count <= 0:
+                    self.dump()
+                else:
+                    self.memory.pop(0)
+                    self.count -= 1
 
-        # Получить сообщение из памяти, начиная с конца
+        # Получить сообщение из памяти, начиная с начала
         # По умолчанию получает последнее сообщение
-        def get(self, pos=1) -> dict:
-            return {"role": "user", "content": self.memory[-pos]}
+        def get(self, pos=-1) -> dict:
+            return self.memory[pos]
 
         # Кешировать позицию из памяти в файл для дальнейшего использования, по умолчанию первая
         # По умолчанию пишет в cache/memory.txt
-        def dump(self, pos=0, store_file="../cache/memory.txt"):
-            with open(store_file, "w") as txt_file:
-                txt_file.write(" ".join(self.memory.pop(pos)) + "\n")
+        def dump(self, pos=0):
+            with open(self.memfile, 'a') as f:
+                f.write(json.dumps(self.memory.pop(pos), ensure_ascii=False) + '\n', )
 
         # Сохраняет в файл всю память
-        def dump_all(self, store_file="../cache/memory.txt"):
-            with open(store_file, "w") as txt_file:
-                for line in self.memory:
-                    txt_file.write(" ".join(line) + "\n")
+        def dump_all(self):
+            for _ in self.memory:
+                self.dump()
+
+        # Удалить всю память
+        def clear(self):
+            self.memory.clear()
 
         # Записать в память из файла
-        # Принимает аргумент, количество сообщение начиная с конца и файл, откуда читать
-        def get_from_file(self, pos=5, store_file="../cache/memory.txt"):
+        # TODO: Принимает количество сообщений начиная с конца
+        def load_history(self):
+            items = []
             try:
-                with open(store_file, "r") as txt_file:
-                    for line in txt_file:
-                        self.store_noauthor(line)
-                        print(line)
-            except OSError:
-                open(store_file, 'w').close()
+                with open(self.memfile, 'r') as f:
+                    # Use a deque to track the last `n` lines efficiently
+                    last_n_lines = deque(f, maxlen=self.memlen)
+
+                # Parse non-empty lines into JSON objects
+                for line in last_n_lines:
+                    stripped_line = line.strip()
+                    if stripped_line:  # Skip empty lines
+                        items.append(json.loads(stripped_line))
+
+            except FileNotFoundError:
+                open(self.memfile, 'w').close()
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error in line: {e.doc}")
+
+            return items
 
 CBot = Bot()
+atexit.register(CBot.mem.dump_all)
 
 @bot.event
 async def on_message(message):
@@ -115,42 +122,30 @@ async def on_message(message):
         if message.channel.id not in allowed_channel_ids:
             return  # Если канал не разрешён, игнорируем сообщение
 
-        #if "@romangobb’s_bot#7030" not in message.content:
-        #    return
+        CBot.mem.store(message.author.name, message.content)
 
-        # Генерация ответа
-        #context = "\n".join(
-        #    [msg["content"] for msg in chat_history[-1:]])  # Используем последние 1 сообщение как контекст
+        # Проверяем есть ли пинг бота
+        if bot.user not in message.mentions:
+            return
 
-        """
         context = CBot.context()
-        context.append({"role": "user", "content": f"{message.author.name}: {message.content}"})
+
+        print(*context, "\n", sep="\n")
+
         response = CBot.generate(context)
 
-        print("Сообщения: ")
-        for i in context:
-            print(i)
-
-        print(f"Ответ: {response}")
-
-        CBot.mem.store(message.author.name, message.content)
-        CBot.mem.store_noauthor(response)"""
-
-        response = CBot.generate_smem(message.author.name, message.content)
+        if len(response) == 0:
+            print("Empty!")
 
         # Отправляем ответ в тот же канал
-        if len(response) == 0:
-            pass
-        elif len(response) > 2000:
+        if len(response) > 2000:
             await message.reply("Мужик, ну ты это, извини, но бот настрочил слишком много и дискорд зажевал сообщение. \
-Переспроси вопрос и попроси её написать ответ покороче", mention_author=True)
+        Переспроси вопрос и попроси её написать ответ покороче", mention_author=True)
         else:
             await message.reply(response, mention_author=True)
 
-
     except Exception as e:
         print(f"Произошла ошибка: {e}")
-        traceback.print_exc()
 
 
 # Запуск бота
